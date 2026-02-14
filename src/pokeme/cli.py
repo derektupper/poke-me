@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import webbrowser
 
 from pokeme import __version__
 
@@ -136,6 +137,27 @@ def cmd_status(args):
         print(f"  [{agent}] ({age}s ago) {question}")
 
 
+def cmd_stop(args):
+    port = args.port
+    if not _is_server_running(port):
+        print("No pokeme server running.")
+        return
+
+    try:
+        _api_post(port, "/api/shutdown", {})
+    except Exception:
+        pass  # server may close before response is fully read
+    print("pokeme: server stopped")
+
+
+def cmd_open(args):
+    port = args.port
+    _ensure_server(port)
+    url = _server_url(port)
+    webbrowser.open(url)
+    print(f"pokeme: opened {url}", file=sys.stderr)
+
+
 def cmd_server(args):
     """Start the pokeme server (internal use)."""
     from pokeme.server import run_server
@@ -166,6 +188,14 @@ def main():
     status_parser = sub.add_parser("status", help="Show pending requests")
     status_parser.add_argument("--port", **port_kwargs)
 
+    # stop
+    stop_parser = sub.add_parser("stop", help="Stop the background server")
+    stop_parser.add_argument("--port", **port_kwargs)
+
+    # open
+    open_parser = sub.add_parser("open", help="Open the web UI in your browser")
+    open_parser.add_argument("--port", **port_kwargs)
+
     # _server (hidden — used internally to start the server from a frozen binary)
     server_parser = sub.add_parser("_server")
     server_parser.add_argument("--port", **port_kwargs)
@@ -176,6 +206,10 @@ def main():
         cmd_ask(args)
     elif args.command == "status":
         cmd_status(args)
+    elif args.command == "stop":
+        cmd_stop(args)
+    elif args.command == "open":
+        cmd_open(args)
     elif args.command == "_server":
         cmd_server(args)
     else:

@@ -104,6 +104,7 @@ class RequestStore:
 
 # Global store — shared across all handler instances
 store = RequestStore()
+_server_instance: HTTPServer | None = None
 
 LOCALHOST_ORIGINS = frozenset({"http://127.0.0.1:9131", "http://localhost:9131"})
 
@@ -196,6 +197,11 @@ class RequestHandler(JsonMixin, BaseHTTPRequestHandler):
                 self.send_json({"status": "ok"})
             else:
                 self.send_json({"error": "request not found or already answered"}, HTTPStatus.NOT_FOUND)
+
+        elif self.path == "/api/shutdown":
+            self.send_json({"status": "ok"})
+            if _server_instance:
+                threading.Thread(target=_server_instance.shutdown, daemon=True).start()
         else:
             self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
@@ -225,13 +231,14 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 def run_server(port: int = 9131, idle_timeout: int = 600):
     """Start the pokeme server. Blocks until idle timeout or killed."""
     # Update the localhost origins set to include the actual port
-    global LOCALHOST_ORIGINS
+    global LOCALHOST_ORIGINS, _server_instance
     LOCALHOST_ORIGINS = frozenset({
         f"http://127.0.0.1:{port}",
         f"http://localhost:{port}",
     })
 
     server = ThreadedHTTPServer(("127.0.0.1", port), RequestHandler)
+    _server_instance = server
 
     def watchdog():
         last_active = time.time()
