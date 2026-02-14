@@ -7,9 +7,6 @@ import time
 import urllib.error
 import urllib.request
 
-from pokeme.notifications.desktop import DesktopChannel
-
-
 DEFAULT_PORT = 9131
 DEFAULT_TIMEOUT = 300  # 5 minutes
 
@@ -94,14 +91,7 @@ def cmd_ask(args):
         sys.exit(1)
 
     request_id = result["id"]
-
-    # Fire desktop notification
-    ui_url = _server_url(port)
-    try:
-        channel = DesktopChannel()
-        channel.notify(args.question, args.agent, ui_url)
-    except Exception:
-        print(f"pokeme: respond at {ui_url}", file=sys.stderr)
+    print(f"pokeme: respond at {_server_url(port)}", file=sys.stderr)
 
     # Poll for answer
     deadline = time.time() + args.timeout

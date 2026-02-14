@@ -464,6 +464,37 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
     to   { opacity: 1; transform: translateY(0); }
   }
   .card { animation: card-enter 0.3s ease-out; }
+
+  /* --- Notification banner --- */
+  .notif-banner {
+    max-width: 640px;
+    margin: 0 auto 1.5rem;
+    background: #1a1620;
+    border: 1px solid #2a2035;
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.82rem;
+    color: #999;
+    animation: card-enter 0.3s ease-out;
+  }
+  .notif-banner .notif-icon { font-size: 1.1rem; flex-shrink: 0; }
+  .notif-banner button {
+    background: #ff6b35;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    margin-left: auto;
+    flex-shrink: 0;
+    transition: background 0.15s;
+  }
+  .notif-banner button:hover { background: #e85d2a; }
 </style>
 </head>
 <body>
@@ -523,6 +554,12 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
   </svg>
 </div>
 
+<div id="notif-banner" class="notif-banner" style="display:none">
+  <span class="notif-icon">🔔</span>
+  <span>Enable browser notifications so you know when agents need help — even when this tab is in the background.</span>
+  <button id="notif-enable-btn">Enable</button>
+</div>
+
 <div id="cards"></div>
 <div id="empty">
   <div class="empty-icon">
@@ -540,6 +577,53 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
 const cardsEl = document.getElementById("cards");
 const emptyEl = document.getElementById("empty");
 const answered = new Map();
+
+// --- Browser Notification API ---
+let notifPermission = Notification.permission;
+
+async function requestNotifPermission() {
+  if (!("Notification" in window)) return;
+  if (notifPermission === "default") {
+    notifPermission = await Notification.requestPermission();
+  }
+}
+
+function fireNotification(agentName, question) {
+  if (notifPermission !== "granted") return;
+  try {
+    const n = new Notification("pokeme — " + (agentName || "Agent") + " needs input", {
+      body: question.length > 120 ? question.slice(0, 117) + "..." : question,
+      icon: "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="24" cy="32" r="22" fill="%236366f1" opacity="0.3"/><circle cx="40" cy="32" r="22" fill="%23ff6b35" opacity="0.3"/></svg>'),
+      tag: "pokeme",
+      renotify: true,
+    });
+    n.onclick = () => { window.focus(); n.close(); };
+  } catch {}
+}
+
+// Ask for permission right away
+requestNotifPermission();
+
+// Show enable-notifications banner if permission not yet granted
+const notifBanner = document.getElementById("notif-banner");
+const notifBtn = document.getElementById("notif-enable-btn");
+
+function updateNotifBanner() {
+  if (!("Notification" in window) || notifPermission === "granted") {
+    notifBanner.style.display = "none";
+  } else if (notifPermission === "denied") {
+    notifBanner.style.display = "none";  // can't ask again, browser blocked it
+  } else {
+    notifBanner.style.display = "flex";
+  }
+}
+
+notifBtn.addEventListener("click", async () => {
+  notifPermission = await Notification.requestPermission();
+  updateNotifBanner();
+});
+
+updateNotifBanner();
 
 // --- Agent icon system ---
 // Each agent gets a deterministic color + icon based on name hash
@@ -759,6 +843,8 @@ async function poll() {
       cardsEl.prepend(renderCard(req));
       const ta = cardsEl.firstChild.querySelector("textarea");
       if (ta) ta.focus();
+      // Fire browser notification for new requests
+      fireNotification(req.agent, req.question);
     }
   }
 

@@ -1,6 +1,6 @@
 # pokeme
 
-A CLI tool that lets AI coding agents ask you questions. When an agent needs input, it pops a desktop notification and waits for your answer.
+A CLI tool that lets AI coding agents ask you questions. When an agent needs input, it sends a browser notification and waits for your answer.
 
 Zero dependencies. Pure Python stdlib. Works with any agent that can run shell commands.
 
@@ -25,9 +25,9 @@ pokeme ask "Which database should I use?"
 ```
 
 What happens:
-1. A desktop notification appears: *"pokeme: An agent needs your help"*
-2. A local web UI starts at **http://localhost:9131**
-3. You open the page, type your answer, hit Send
+1. A local web UI starts at **http://localhost:9131**
+2. If the page is open, a browser notification pops up: *"pokeme — Agent needs input"*
+3. You type your answer, hit Send
 4. The CLI prints your answer to stdout and exits
 
 The agent reads stdout and continues working.
@@ -134,19 +134,16 @@ Wrap the CLI call in an MCP tool definition so any MCP-compatible agent can call
 
 - First `pokeme ask` auto-starts a lightweight HTTP server on localhost:9131
 - The server holds all pending questions in memory (no database, no files)
-- The CLI posts a question to the server, fires a desktop toast notification, then polls for the answer
-- The web UI polls the server every 2 seconds and displays pending question cards
+- The CLI posts a question to the server, then polls for the answer
+- The web UI polls the server every 2 seconds, displays pending question cards, and fires browser notifications for new requests
 - When you submit an answer, the CLI picks it up and prints it to stdout
 - The server shuts itself down after 10 minutes of no pending questions
 
-## Platform support
+## Notifications
 
-Desktop notifications use OS-native mechanisms:
-- **Windows** -- PowerShell toast notifications
-- **macOS** -- `osascript` / Notification Center
-- **Linux** -- `notify-send`
+pokeme uses the **browser Notification API** to alert you when agents need input. On first visit to the web UI, you'll see a banner asking to enable notifications. Once enabled, you'll get browser notifications even when the tab is in the background.
 
-If notifications fail (e.g. headless server), the URL is printed to stderr as a fallback.
+**Tip:** Keep `http://localhost:9131` open in a browser tab. When any agent sends a question, you'll get a notification — click it to jump straight to the answer form.
 
 ## Requirements
 
