@@ -1,5 +1,7 @@
 # pokeme
 
+![Screenshot of PokeMe in action](image.png)
+
 A CLI tool that lets AI coding agents ask you questions and wait for your answer. When an agent needs input, it sends a browser notification and displays the question in a local web UI.
 
 Zero dependencies. Pure Python stdlib. Works with any agent that can run shell commands.
