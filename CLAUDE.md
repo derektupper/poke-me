@@ -4,7 +4,7 @@ A CLI tool and HTTP server that lets AI coding agents ask humans for input in re
 
 ## Project Structure
 
-- `src/pokeme/cli.py` — CLI entry point (`pokeme ask`, `pokeme status`)
+- `src/pokeme/cli.py` — CLI entry point (`pokeme ask`, `pokeme status`, `pokeme stop`, `pokeme open`)
 - `src/pokeme/server.py` — Threaded HTTP server with embedded web UI
 - `tests/` — Unit and integration tests (pytest)
 - `pyproject.toml` — Package metadata and config

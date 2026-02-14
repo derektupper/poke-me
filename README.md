@@ -71,6 +71,22 @@ Output:
   [frontend-agent] (3s ago) Dark mode or light mode?
 ```
 
+### Open the web UI
+
+```bash
+pokeme open
+```
+
+Starts the server if needed and opens `http://localhost:9131` in your default browser.
+
+### Stop the server
+
+```bash
+pokeme stop
+```
+
+Gracefully shuts down the background server. The server also stops itself automatically after 10 minutes of inactivity.
+
 ## Exit codes
 
 | Code | Meaning |
