@@ -1,4 +1,5 @@
 import json
+import re
 import threading
 import time
 import uuid
@@ -6,6 +7,26 @@ from dataclasses import asdict, dataclass, field
 from http import HTTPStatus
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
+
+
+# --- Limits ---
+MAX_REQUEST_BODY = 64 * 1024  # 64 KB max POST body
+MAX_QUESTION_LEN = 2000
+MAX_CONTEXT_LEN = 5000
+MAX_AGENT_LEN = 100
+MAX_TASK_LEN = 200
+MAX_ANSWER_LEN = 10000
+MAX_PENDING_REQUESTS = 100
+ANSWERED_TTL = 300  # evict answered requests after 5 minutes
+
+# Only hex chars allowed in request IDs (defense-in-depth)
+VALID_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+
+
+def _truncate(value: str | None, limit: int) -> str | None:
+    if value is None:
+        return None
+    return value[:limit]
 
 
 @dataclass
@@ -29,19 +50,24 @@ class RequestStore:
         self._lock = threading.Lock()
 
     def create(self, question: str, context: str | None = None,
-               agent: str | None = None, task: str | None = None) -> Request:
+               agent: str | None = None, task: str | None = None) -> Request | None:
         req = Request(
             id=uuid.uuid4().hex[:12],
-            question=question,
-            context=context,
-            agent=agent,
-            task=task,
+            question=_truncate(question, MAX_QUESTION_LEN),
+            context=_truncate(context, MAX_CONTEXT_LEN),
+            agent=_truncate(agent, MAX_AGENT_LEN),
+            task=_truncate(task, MAX_TASK_LEN),
         )
         with self._lock:
+            self._evict_stale()
+            if sum(1 for r in self._requests.values() if r.status == "pending") >= MAX_PENDING_REQUESTS:
+                return None  # too many pending
             self._requests[req.id] = req
         return req
 
     def get(self, request_id: str) -> Request | None:
+        if not VALID_ID_RE.match(request_id):
+            return None
         with self._lock:
             return self._requests.get(request_id)
 
@@ -50,12 +76,14 @@ class RequestStore:
             return [r for r in self._requests.values() if r.status == "pending"]
 
     def answer(self, request_id: str, text: str) -> bool:
+        if not VALID_ID_RE.match(request_id):
+            return False
         with self._lock:
             req = self._requests.get(request_id)
             if not req or req.status != "pending":
                 return False
             req.status = "answered"
-            req.answer = text
+            req.answer = _truncate(text, MAX_ANSWER_LEN)
             req.answered_at = time.time()
             return True
 
@@ -63,26 +91,52 @@ class RequestStore:
         with self._lock:
             return any(r.status == "pending" for r in self._requests.values())
 
+    def _evict_stale(self) -> None:
+        """Remove answered requests older than ANSWERED_TTL. Call under lock."""
+        now = time.time()
+        stale = [
+            rid for rid, r in self._requests.items()
+            if r.status == "answered" and r.answered_at is not None and now - r.answered_at > ANSWERED_TTL
+        ]
+        for rid in stale:
+            del self._requests[rid]
+
 
 # Global store — shared across all handler instances
 store = RequestStore()
 
+LOCALHOST_ORIGINS = frozenset({"http://127.0.0.1:9131", "http://localhost:9131"})
+
 
 class JsonMixin:
     """Helpers for JSON request/response handling."""
+
+    def _cors_origin(self) -> str:
+        """Return the Origin header only if it's a localhost origin."""
+        origin = self.headers.get("Origin", "")
+        if origin in LOCALHOST_ORIGINS:
+            return origin
+        # Also accept any localhost:<port> variant
+        if origin.startswith("http://127.0.0.1:") or origin.startswith("http://localhost:"):
+            return origin
+        return ""
 
     def send_json(self, data, status=HTTPStatus.OK):
         body = json.dumps(data).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self._cors_origin()
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
         self.end_headers()
         self.wfile.write(body)
 
     def read_json(self) -> dict | None:
         length = int(self.headers.get("Content-Length", 0))
         if not length:
+            return None
+        if length > MAX_REQUEST_BODY:
             return None
         try:
             return json.loads(self.rfile.read(length))
@@ -127,6 +181,9 @@ class RequestHandler(JsonMixin, BaseHTTPRequestHandler):
                 agent=data.get("agent"),
                 task=data.get("task"),
             )
+            if req is None:
+                self.send_json({"error": "too many pending requests"}, HTTPStatus.TOO_MANY_REQUESTS)
+                return
             self.send_json({"id": req.id})
 
         elif self.path == "/api/answer":
@@ -144,7 +201,9 @@ class RequestHandler(JsonMixin, BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(HTTPStatus.NO_CONTENT)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self._cors_origin()
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
@@ -165,6 +224,13 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 
 def run_server(port: int = 9131, idle_timeout: int = 600):
     """Start the pokeme server. Blocks until idle timeout or killed."""
+    # Update the localhost origins set to include the actual port
+    global LOCALHOST_ORIGINS
+    LOCALHOST_ORIGINS = frozenset({
+        f"http://127.0.0.1:{port}",
+        f"http://localhost:{port}",
+    })
+
     server = ThreadedHTTPServer(("127.0.0.1", port), RequestHandler)
 
     def watchdog():
@@ -345,10 +411,19 @@ function timeAgo(ts) {
   return Math.floor(s / 3600) + "h ago";
 }
 
+function esc(s) {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+
 function renderCard(req) {
   const div = document.createElement("div");
   div.className = "card";
+
+  // Use data attribute for ID (safe — setAttribute escapes)
   div.dataset.id = req.id;
+  const safeId = esc(req.id);
 
   let meta = `<span>${timeAgo(req.created_at)}</span>`;
   if (req.agent) meta += `<span class="agent-tag">${esc(req.agent)}</span>`;
@@ -364,21 +439,28 @@ function renderCard(req) {
     <div class="question">${esc(req.question)}</div>
     ${contextHtml}
     <div class="answer-form">
-      <textarea rows="1" placeholder="Type your answer..." onkeydown="handleKey(event, '${req.id}')"></textarea>
-      <button onclick="submitAnswer('${req.id}')">Send</button>
+      <textarea rows="1" placeholder="Type your answer..."></textarea>
+      <button>Send</button>
     </div>
   `;
+
+  // Attach event handlers via JS instead of inline handlers (avoids ID injection)
+  const textarea = div.querySelector("textarea");
+  const btn = div.querySelector("button");
+  btn.addEventListener("click", () => submitAnswer(req.id));
+  textarea.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      submitAnswer(req.id);
+    }
+  });
+
   return div;
 }
 
-function esc(s) {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
-}
-
 async function submitAnswer(id) {
-  const card = document.querySelector(`[data-id="${id}"]`);
+  const card = document.querySelector(`[data-id="${CSS.escape(id)}"]`);
+  if (!card) return;
   const textarea = card.querySelector("textarea");
   const btn = card.querySelector("button");
   const text = textarea.value.trim();
@@ -400,13 +482,6 @@ async function submitAnswer(id) {
   } catch {
     btn.disabled = false;
     btn.textContent = "Send";
-  }
-}
-
-function handleKey(e, id) {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    submitAnswer(id);
   }
 }
 

@@ -1,3 +1,4 @@
+README.md
 pyproject.toml
 src/pokeme/__init__.py
 src/pokeme/cli.py
