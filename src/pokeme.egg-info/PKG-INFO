@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: pokeme
+Version: 0.1.0
+Summary: Desktop notification CLI for AI agents that need human input
+License-Expression: MIT
+Requires-Python: >=3.9

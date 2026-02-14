@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pokeme"
+version = "0.1.0"
+description = "Desktop notification CLI for AI agents that need human input"
+requires-python = ">=3.9"
+license = "MIT"
+
+[project.scripts]
+pokeme = "pokeme.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
