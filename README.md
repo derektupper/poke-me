@@ -1,6 +1,6 @@
 # pokeme
 
-A CLI tool that lets AI coding agents ask you questions. When an agent needs input, it sends a browser notification and waits for your answer.
+A CLI tool that lets AI coding agents ask you questions and wait for your answer. When an agent needs input, it sends a browser notification and displays the question in a local web UI.
 
 Zero dependencies. Pure Python stdlib. Works with any agent that can run shell commands.
 
@@ -130,20 +130,49 @@ def ask_human(question, context=""):
 
 Wrap the CLI call in an MCP tool definition so any MCP-compatible agent can call it directly.
 
+## Building a standalone binary
+
+pokeme can be packaged as a single executable using [PyInstaller](https://pyinstaller.org/) so users don't need Python installed.
+
+```bash
+pip install pyinstaller
+pyinstaller --onefile --name pokeme src/pokeme/cli.py
+```
+
+The binary is output to `dist/pokeme` (or `dist/pokeme.exe` on Windows).
+
+**Note:** PyInstaller can only build for the OS it runs on. To build for Linux, run the command on a Linux machine (or use WSL/Docker/CI).
+
 ## How it works under the hood
 
 - First `pokeme ask` auto-starts a lightweight HTTP server on localhost:9131
 - The server holds all pending questions in memory (no database, no files)
-- The CLI posts a question to the server, then polls for the answer
-- The web UI polls the server every 2 seconds, displays pending question cards, and fires browser notifications for new requests
+- The CLI posts a question via the REST API, then polls for the answer
+- The web UI polls the server every 2 seconds, displays pending question cards with agent avatars, and fires browser notifications for new requests
 - When you submit an answer, the CLI picks it up and prints it to stdout
 - The server shuts itself down after 10 minutes of no pending questions
+- Answered requests are evicted from memory after 5 minutes
+
+### Security
+
+- All traffic is localhost-only — the server binds to `127.0.0.1`
+- CORS restricted to localhost origins
+- Input validation and field length limits on all endpoints (questions: 2000 chars, answers: 10,000 chars)
+- Request body size capped at 64 KB
+- Maximum 100 pending requests at a time
+- Request IDs validated against a strict hex pattern
 
 ## Notifications
 
 pokeme uses the **browser Notification API** to alert you when agents need input. On first visit to the web UI, you'll see a banner asking to enable notifications. Once enabled, you'll get browser notifications even when the tab is in the background.
 
 **Tip:** Keep `http://localhost:9131` open in a browser tab. When any agent sends a question, you'll get a notification — click it to jump straight to the answer form.
+
+## Running tests
+
+```bash
+pytest tests/
+```
 
 ## Requirements
 
