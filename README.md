@@ -1,6 +1,6 @@
 # pokeme
 
-![Screenshot of PokeMe in action](image.png)
+![Screenshot of PokeMe in action](pokeme-screenshot.png)
 
 A CLI tool that lets AI coding agents ask you questions and wait for your answer. When an agent needs input, it sends a browser notification and displays the question in a local web UI.
 
