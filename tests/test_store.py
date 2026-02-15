@@ -1,8 +1,9 @@
 """Unit tests for the in-memory RequestStore."""
 
+import json
 import time
 import threading
-from pokeme.server import RequestStore, VALID_ID_RE, MAX_PENDING_REQUESTS, ANSWERED_TTL
+from pokeme.server import RequestStore, VALID_ID_RE, MAX_PENDING_REQUESTS, ANSWERED_TTL, MAX_COMMAND_LEN
 
 
 class TestRequestCreation:
@@ -175,6 +176,53 @@ class TestEviction:
         # Still fresh
         s.create("trigger eviction")
         assert s.get(req.id) is not None
+
+
+class TestPermissionRequest:
+    """Permission request creation and answering."""
+
+    def test_create_permission_request(self):
+        s = RequestStore()
+        req = s.create("Delete /tmp files", command="rm -rf /tmp/*", request_type="permission")
+        assert req is not None
+        assert req.request_type == "permission"
+        assert req.command == "rm -rf /tmp/*"
+        assert req.question == "Delete /tmp files"
+        assert req.status == "pending"
+
+    def test_default_type_is_question(self):
+        s = RequestStore()
+        req = s.create("What color?")
+        assert req.request_type == "question"
+        assert req.command is None
+
+    def test_command_truncation(self):
+        s = RequestStore()
+        req = s.create("q", command="x" * 5000, request_type="permission")
+        assert len(req.command) == MAX_COMMAND_LEN
+
+    def test_invalid_request_type_defaults_to_question(self):
+        s = RequestStore()
+        req = s.create("q", request_type="bogus")
+        assert req.request_type == "question"
+
+    def test_answer_permission_with_json(self):
+        s = RequestStore()
+        req = s.create("deploy?", command="kubectl apply", request_type="permission")
+        answer_json = json.dumps({"decision": "approved", "comment": "go ahead"})
+        ok = s.answer(req.id, answer_json)
+        assert ok is True
+        parsed = json.loads(req.answer)
+        assert parsed["decision"] == "approved"
+        assert parsed["comment"] == "go ahead"
+
+    def test_permission_appears_in_pending(self):
+        s = RequestStore()
+        req = s.create("run this?", command="npm install", request_type="permission")
+        pending = s.pending()
+        assert len(pending) == 1
+        assert pending[0].request_type == "permission"
+        assert pending[0].command == "npm install"
 
 
 class TestThreadSafety:
