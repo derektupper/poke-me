@@ -197,3 +197,66 @@ class TestErrors:
     def test_unknown_route(self, server):
         status, data = _get_raw(f"{server}/api/nope")
         assert status == 404
+
+
+# --- Permission flow ---
+
+class TestPermissionFlow:
+    def test_permission_full_approve_flow(self, server):
+        """Create permission request, verify pending, approve it, verify status."""
+        status, data = _post(f"{server}/api/ask", {
+            "question": "Delete temp files?",
+            "command": "rm -rf /tmp/*",
+            "request_type": "permission",
+            "agent": "cleanup-bot",
+        })
+        assert status == 200
+        rid = data["id"]
+
+        # Verify it appears in pending with correct type
+        pending = _get(f"{server}/api/pending")
+        assert len(pending) == 1
+        assert pending[0]["request_type"] == "permission"
+        assert pending[0]["command"] == "rm -rf /tmp/*"
+
+        # Approve it
+        answer = json.dumps({"decision": "approved", "comment": ""})
+        status, data = _post(f"{server}/api/answer", {"id": rid, "answer": answer})
+        assert status == 200
+
+        # Verify status
+        info = _get(f"{server}/api/status/{rid}")
+        assert info["status"] == "answered"
+        parsed = json.loads(info["answer"])
+        assert parsed["decision"] == "approved"
+
+    def test_permission_deny_flow(self, server):
+        status, data = _post(f"{server}/api/ask", {
+            "question": "Drop database?",
+            "command": "DROP DATABASE prod",
+            "request_type": "permission",
+            "agent": "db-bot",
+        })
+        rid = data["id"]
+        answer = json.dumps({"decision": "denied", "comment": "too dangerous"})
+        _post(f"{server}/api/answer", {"id": rid, "answer": answer})
+        info = _get(f"{server}/api/status/{rid}")
+        parsed = json.loads(info["answer"])
+        assert parsed["decision"] == "denied"
+        assert parsed["comment"] == "too dangerous"
+
+    def test_permission_missing_command_returns_400(self, server):
+        status, data = _post_raw(f"{server}/api/ask", {
+            "question": "do something",
+            "request_type": "permission",
+        })
+        assert status == 400
+        assert "command" in data["error"]
+
+    def test_question_type_backward_compat(self, server):
+        """Old-style request with no request_type should still work."""
+        status, data = _post(f"{server}/api/ask", {"question": "hello?"})
+        assert status == 200
+        info = _get(f"{server}/api/status/{data['id']}")
+        assert info["request_type"] == "question"
+        assert info["command"] is None

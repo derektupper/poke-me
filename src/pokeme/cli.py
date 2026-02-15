@@ -114,6 +114,63 @@ def cmd_ask(args):
     sys.exit(1)
 
 
+def cmd_permit(args):
+    port = args.port
+    _ensure_server(port)
+
+    payload = {
+        "question": args.question,
+        "command": args.cmd,
+        "request_type": "permission",
+    }
+    if args.context:
+        payload["context"] = args.context
+    if args.agent:
+        payload["agent"] = args.agent
+    if args.task:
+        payload["task"] = args.task
+
+    try:
+        result = _api_post(port, "/api/ask", payload)
+    except Exception as e:
+        print(f"pokeme: failed to reach server: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    request_id = result["id"]
+    print(f"pokeme: respond at {_server_url(port)}", file=sys.stderr)
+
+    # Poll for decision
+    deadline = time.time() + args.timeout
+    while time.time() < deadline:
+        try:
+            status = _api_get(port, f"/api/status/{request_id}")
+            if status.get("status") == "answered":
+                try:
+                    answer_data = json.loads(status["answer"])
+                    decision = answer_data.get("decision", "denied")
+                    comment = answer_data.get("comment", "")
+                except (json.JSONDecodeError, TypeError):
+                    decision = "denied"
+                    comment = ""
+
+                if decision == "approved":
+                    print("approved")
+                    if comment:
+                        print(comment, file=sys.stderr)
+                    sys.exit(0)
+                else:
+                    print("denied")
+                    if comment:
+                        print(comment, file=sys.stderr)
+                    sys.exit(2)
+        except Exception:
+            pass
+        time.sleep(1)
+
+    print("pokeme: timed out waiting for decision", file=sys.stderr)
+    sys.exit(1)
+
+
 def cmd_status(args):
     port = args.port
     if not _is_server_running(port):
@@ -184,6 +241,16 @@ def main():
     ask_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="Seconds to wait (default: 300)")
     ask_parser.add_argument("--port", **port_kwargs)
 
+    # permit
+    permit_parser = sub.add_parser("permit", help="Ask the user to approve or deny an action")
+    permit_parser.add_argument("question", help="Description of the action needing approval")
+    permit_parser.add_argument("--command", "-C", dest="cmd", required=True, help="The specific command/action to approve")
+    permit_parser.add_argument("--context", "-c", help="Additional context")
+    permit_parser.add_argument("--agent", "-a", help="Name of the agent asking")
+    permit_parser.add_argument("--task", "-t", help="Description of what the agent is working on")
+    permit_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="Seconds to wait (default: 300)")
+    permit_parser.add_argument("--port", **port_kwargs)
+
     # status
     status_parser = sub.add_parser("status", help="Show pending requests")
     status_parser.add_argument("--port", **port_kwargs)
@@ -204,6 +271,8 @@ def main():
 
     if args.command == "ask":
         cmd_ask(args)
+    elif args.command == "permit":
+        cmd_permit(args)
     elif args.command == "status":
         cmd_status(args)
     elif args.command == "stop":

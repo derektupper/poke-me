@@ -16,7 +16,9 @@ MAX_CONTEXT_LEN = 5000
 MAX_AGENT_LEN = 100
 MAX_TASK_LEN = 200
 MAX_ANSWER_LEN = 10000
+MAX_COMMAND_LEN = 2000
 MAX_PENDING_REQUESTS = 100
+VALID_REQUEST_TYPES = ("question", "permission")
 ANSWERED_TTL = 300  # evict answered requests after 5 minutes
 
 # Only hex chars allowed in request IDs (defense-in-depth)
@@ -36,6 +38,8 @@ class Request:
     context: str | None = None
     agent: str | None = None
     task: str | None = None
+    command: str | None = None
+    request_type: str = "question"
     status: str = "pending"
     answer: str | None = None
     created_at: float = field(default_factory=time.time)
@@ -50,13 +54,17 @@ class RequestStore:
         self._lock = threading.Lock()
 
     def create(self, question: str, context: str | None = None,
-               agent: str | None = None, task: str | None = None) -> Request | None:
+               agent: str | None = None, task: str | None = None,
+               command: str | None = None,
+               request_type: str = "question") -> Request | None:
         req = Request(
             id=uuid.uuid4().hex[:12],
             question=_truncate(question, MAX_QUESTION_LEN),
             context=_truncate(context, MAX_CONTEXT_LEN),
             agent=_truncate(agent, MAX_AGENT_LEN),
             task=_truncate(task, MAX_TASK_LEN),
+            command=_truncate(command, MAX_COMMAND_LEN),
+            request_type=request_type if request_type in VALID_REQUEST_TYPES else "question",
         )
         with self._lock:
             self._evict_stale()
@@ -176,11 +184,17 @@ class RequestHandler(JsonMixin, BaseHTTPRequestHandler):
             if not data or "question" not in data:
                 self.send_json({"error": "missing question"}, HTTPStatus.BAD_REQUEST)
                 return
+            request_type = data.get("request_type", "question")
+            if request_type == "permission" and not data.get("command"):
+                self.send_json({"error": "missing command for permission request"}, HTTPStatus.BAD_REQUEST)
+                return
             req = store.create(
                 question=data["question"],
                 context=data.get("context"),
                 agent=data.get("agent"),
                 task=data.get("task"),
+                command=data.get("command"),
+                request_type=request_type,
             )
             if req is None:
                 self.send_json({"error": "too many pending requests"}, HTTPStatus.TOO_MANY_REQUESTS)
@@ -452,10 +466,71 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
   .card .send-btn:disabled { background: #333; cursor: default; transform: none; }
   .card .send-btn svg { width: 20px; height: 20px; }
 
+  /* --- Permission card --- */
+  .card.permission::before { background: #f59e0b !important; }
+
+  .card .command-block {
+    background: #0e0e11;
+    border: 1px solid #252530;
+    border-radius: 8px;
+    padding: 0.6rem 0.8rem;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 0.85rem;
+    color: #e0e0e0;
+    margin-bottom: 1rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.5;
+  }
+
+  .card .permit-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .card .permit-buttons {
+    display: flex;
+    gap: 0.5rem;
+  }
+  .card .permit-comment {
+    background: #0e0e11;
+    border: 1px solid #252530;
+    color: #e0e0e0;
+    border-radius: 8px;
+    padding: 0.6rem 0.8rem;
+    font-size: 0.85rem;
+    font-family: inherit;
+    resize: none;
+    transition: border-color 0.15s;
+  }
+  .card .permit-comment:focus { outline: none; border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,0.1); }
+
+  .card .approve-btn, .card .deny-btn {
+    flex: 1;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 0.6rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .card .approve-btn { background: #2ea043; }
+  .card .approve-btn:hover { background: #28903b; transform: scale(1.02); }
+  .card .approve-btn:active { transform: scale(0.98); }
+  .card .approve-btn:disabled { background: #333; cursor: default; transform: none; }
+
+  .card .deny-btn { background: #da3633; }
+  .card .deny-btn:hover { background: #c42f2d; transform: scale(1.02); }
+  .card .deny-btn:active { transform: scale(0.98); }
+  .card .deny-btn:disabled { background: #333; cursor: default; transform: none; }
+
   /* --- Answered state --- */
   .answered { opacity: 0.45; }
   .answered::before { background: #2ea043 !important; }
   .answered .answer-form { display: none; }
+  .answered .permit-form { display: none; }
   .answered .answer-text {
     color: #2ea043;
     font-size: 0.85rem;
@@ -758,25 +833,12 @@ function esc(s) {
 const SEND_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
   <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`;
 
-function renderCard(req) {
-  const div = document.createElement("div");
-  div.className = "card";
-  div.dataset.id = req.id;
-
+function renderCardHeader(req) {
   const accent = agentAccent(req.agent);
-  div.style.setProperty("--accent", accent);
   const agentName = req.agent || "anonymous";
-
   let taskHtml = "";
   if (req.task) taskHtml = `<div class="task-label">${esc(req.task)}</div>`;
-
-  let contextHtml = "";
-  if (req.context) {
-    contextHtml = `<div class="context">${esc(req.context)}</div>`;
-  }
-
-  div.innerHTML = `
-    <style>.card[data-id="${esc(req.id)}"]::before { background: ${accent}; }</style>
+  return { accent, html: `
     <div class="card-header">
       ${agentAvatar(req.agent, req.task, req.id)}
       <div class="card-header-text">
@@ -785,23 +847,68 @@ function renderCard(req) {
       </div>
       <span class="time-badge">${timeAgo(req.created_at)}</span>
     </div>
-    <div class="question">${esc(req.question)}</div>
-    ${contextHtml}
-    <div class="answer-form">
-      <textarea rows="1" placeholder="Type your answer..."></textarea>
-      <button class="send-btn" title="Send">${SEND_ICON}</button>
-    </div>
-  `;
+  `};
+}
 
-  const textarea = div.querySelector("textarea");
-  const btn = div.querySelector(".send-btn");
-  btn.addEventListener("click", () => submitAnswer(req.id));
-  textarea.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      submitAnswer(req.id);
+function renderCard(req) {
+  const div = document.createElement("div");
+  div.dataset.id = req.id;
+
+  const { accent, html: headerHtml } = renderCardHeader(req);
+  div.style.setProperty("--accent", accent);
+
+  let contextHtml = "";
+  if (req.context) {
+    contextHtml = `<div class="context">${esc(req.context)}</div>`;
+  }
+
+  if (req.request_type === "permission") {
+    div.className = "card permission";
+    let commandHtml = "";
+    if (req.command) {
+      commandHtml = `<div class="command-block">${esc(req.command)}</div>`;
     }
-  });
+
+    div.innerHTML = `
+      <style>.card[data-id="${esc(req.id)}"]::before { background: #f59e0b; }</style>
+      ${headerHtml}
+      <div class="question">${esc(req.question)}</div>
+      ${commandHtml}
+      ${contextHtml}
+      <div class="permit-form">
+        <textarea class="permit-comment" rows="1" placeholder="Optional comment..."></textarea>
+        <div class="permit-buttons">
+          <button class="approve-btn">Approve</button>
+          <button class="deny-btn">Deny</button>
+        </div>
+      </div>
+    `;
+
+    div.querySelector(".approve-btn").addEventListener("click", () => submitPermission(req.id, "approved"));
+    div.querySelector(".deny-btn").addEventListener("click", () => submitPermission(req.id, "denied"));
+  } else {
+    div.className = "card";
+    div.innerHTML = `
+      <style>.card[data-id="${esc(req.id)}"]::before { background: ${accent}; }</style>
+      ${headerHtml}
+      <div class="question">${esc(req.question)}</div>
+      ${contextHtml}
+      <div class="answer-form">
+        <textarea rows="1" placeholder="Type your answer..."></textarea>
+        <button class="send-btn" title="Send">${SEND_ICON}</button>
+      </div>
+    `;
+
+    const textarea = div.querySelector("textarea");
+    const btn = div.querySelector(".send-btn");
+    btn.addEventListener("click", () => submitAnswer(req.id));
+    textarea.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        submitAnswer(req.id);
+      }
+    });
+  }
 
   return div;
 }
@@ -833,6 +940,36 @@ async function submitAnswer(id) {
   }
 }
 
+async function submitPermission(id, decision) {
+  const card = document.querySelector(`[data-id="${CSS.escape(id)}"]`);
+  if (!card) return;
+  const commentEl = card.querySelector(".permit-comment");
+  const comment = commentEl ? commentEl.value.trim() : "";
+
+  card.querySelectorAll("button").forEach(b => b.disabled = true);
+
+  const answerPayload = JSON.stringify({ decision, comment });
+  try {
+    await fetch("/api/answer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, answer: answerPayload }),
+    });
+    answered.set(id, decision);
+    card.classList.add("answered");
+    const icon = decision === "approved"
+      ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2ea043" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
+      : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#da3633" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+    const label = decision === "approved" ? "Approved" : "Denied";
+    const color = decision === "approved" ? "#2ea043" : "#da3633";
+    card.querySelector(".permit-form").innerHTML = `<div class="answer-text" style="color:${color}">
+      ${icon} ${label}${comment ? " \u2014 " + esc(comment) : ""}</div>`;
+    setTimeout(() => { answered.delete(id); }, 5000);
+  } catch {
+    card.querySelectorAll("button").forEach(b => b.disabled = false);
+  }
+}
+
 async function poll() {
   const pending = await fetchPending();
   const currentIds = new Set(pending.map(r => r.id));
@@ -851,7 +988,11 @@ async function poll() {
       const ta = cardsEl.firstChild.querySelector("textarea");
       if (ta) ta.focus();
       // Fire browser notification for new requests
-      fireNotification(req.agent, req.question);
+      if (req.request_type === "permission") {
+        fireNotification(req.agent, "Permission: " + req.question);
+      } else {
+        fireNotification(req.agent, req.question);
+      }
     }
   }
 
